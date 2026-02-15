@@ -1,6 +1,6 @@
 use axum::body::Bytes;
 use axum::http::StatusCode;
-use image::load_from_memory;
+use image::{load_from_memory, GenericImageView};
 use tracing::{debug, error, instrument, warn};
 
 /// Resize an image from bytes
