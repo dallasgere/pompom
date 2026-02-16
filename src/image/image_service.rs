@@ -1,5 +1,4 @@
-use super::image_types::{ResizeImageInput, ResizeImageOutput};
-use axum::body::Bytes;
+use super::image_types::{CropImageInput, CropImageOutput, ResizeImageInput, ResizeImageOutput};
 use axum::http::StatusCode;
 use image::{GenericImageView, guess_format, load_from_memory};
 use tracing::{debug, error, instrument, warn};
@@ -61,14 +60,35 @@ pub async fn resize_image(
     })?
 }
 
-pub async fn crop_image(data: Bytes) -> Result<Bytes, StatusCode> {
+pub async fn crop_image(image_to_crop: CropImageInput) -> Result<CropImageOutput, StatusCode> {
     tokio::task::spawn_blocking(move || {
-        let image_format = guess_format(&data).map_err(|e| {
+        let image_format = guess_format(&image_to_crop.data).map_err(|e| {
             error!(error = %e, "Failed to guess image format when resizing image");
             StatusCode::UNSUPPORTED_MEDIA_TYPE
         })?;
 
-        Ok(data)
+        debug!("Loading image from memory");
+        let mut img = load_from_memory(&image_to_crop.data).map_err(|e| {
+            error!(error = %e, "Failed to load image from memory");
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        })?;
+
+        let cropped = img.crop(
+            image_to_crop.x,
+            image_to_crop.y,
+            image_to_crop.width,
+            image_to_crop.height,
+        );
+
+        let mut buf = std::io::Cursor::new(Vec::new());
+        cropped.write_to(&mut buf, image_format).map_err(|e| {
+            error!(error = %e, "Failed to encode image");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+        let result = CropImageOutput::new(buf.into_inner(), image_format.to_mime_type());
+
+        Ok(result)
     })
     .await
     .map_err(|e| {
