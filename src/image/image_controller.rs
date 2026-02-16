@@ -7,7 +7,7 @@ use axum::{
 };
 use tracing::{debug, info, instrument, warn};
 
-use super::resize_image::resize_image;
+use super::image_service::resize_image;
 use super::types::ResizeImageInput;
 
 /// Image processing router
