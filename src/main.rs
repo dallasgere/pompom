@@ -1,6 +1,6 @@
 pub mod image;
 
-use axum::{Router, routing::get, extract::DefaultBodyLimit};
+use axum::{Router, extract::DefaultBodyLimit, routing::get};
 use image::image_controller::image_routes;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 

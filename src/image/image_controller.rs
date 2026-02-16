@@ -5,9 +5,10 @@ use axum::{
     response::IntoResponse,
     routing::post,
 };
-use tracing::{info, warn, debug, instrument};
+use tracing::{debug, info, instrument, warn};
 
-use super::resize::resize_image;
+use super::resize_image::resize_image;
+use super::types::ResizeImageInput;
 
 /// Image processing router
 pub fn image_routes() -> Router {
@@ -21,36 +22,69 @@ pub async fn resize_image_controller(
 ) -> Result<impl IntoResponse, StatusCode> {
     info!("Received image resize request");
 
+    let mut image_data = None;
+    let mut width = None;
+    let mut height = None;
+
     while let Ok(Some(field)) = multipart.next_field().await {
-        let field_name = field.name().unwrap_or("<unnamed>");
+        let field_name = field.name().unwrap_or("<unnamed>").to_string();
         debug!(field_name = %field_name, "Found multipart field");
 
-        if field.name() == Some("image") {
-            debug!("Processing image field");
-            let data = field.bytes().await.map_err(|e| {
-                warn!(error = ?e, "Failed to read field bytes");
-                StatusCode::BAD_REQUEST
-            })?;
+        match field_name.as_str() {
+            "image" => {
+                image_data = Some(field.bytes().await.map_err(|e| {
+                    warn!(error = ?e, "Failed to read field bytes");
+                    StatusCode::BAD_REQUEST
+                })?);
+            }
+            "width" => {
+                let width_str = field.text().await.map_err(|e| {
+                    warn!(error = ?e, "Failed to get image width param");
+                    StatusCode::BAD_REQUEST
+                })?;
 
-            let data_size = data.len();
-            info!(bytes = data_size, "Read image data");
+                width = Some(width_str.parse::<u32>().map_err(|e| {
+                    warn!(error = ?e, "Failed to parse width as u32");
+                    StatusCode::BAD_REQUEST
+                })?);
+            }
+            "height" => {
+                let height_str = field.text().await.map_err(|e| {
+                    warn!(error = ?e, "Failed to get the image height param");
+                    StatusCode::BAD_REQUEST
+                })?;
 
-            let resized_bytes = resize_image(data).await?;
-
-            info!(
-                original_bytes = data_size,
-                resized_bytes = resized_bytes.len(),
-                "Successfully resized image"
-            );
-
-            return Ok((
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "image/jpg")],
-                resized_bytes,
-            ));
+                height = Some(height_str.parse::<u32>().map_err(|e| {
+                    warn!(error = ?e, "Failed to parse height as u32");
+                    StatusCode::BAD_REQUEST
+                })?);
+            }
+            _ => {
+                info!("Unexpected multipart form field");
+            }
         }
     }
 
-    warn!("No 'image' field found in multipart data");
-    Err(StatusCode::BAD_REQUEST)
+    // Ensure we have all required fields
+    let data = image_data.ok_or_else(|| {
+        warn!("No 'image' field found in multipart data");
+        StatusCode::BAD_REQUEST
+    })?;
+
+    let width = width.unwrap_or(800);
+    let height = height.unwrap_or(600);
+
+    debug!(
+        width = width,
+        height = height,
+        "Using dimensions for resize"
+    );
+
+    let image_to_resize = ResizeImageInput::new(data, width, height);
+    let resized_image = resize_image(image_to_resize).await?;
+
+    Ok((
+        [(header::CONTENT_TYPE, resized_image.image_mime_type)],
+        resized_image.data,
+    ))
 }
