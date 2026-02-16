@@ -8,7 +8,7 @@ use axum::{
 use tracing::{debug, info, instrument, warn};
 
 use super::image_service::resize_image;
-use super::types::ResizeImageInput;
+use super::image_types::ResizeImageInput;
 
 /// Image processing router
 pub fn image_routes() -> Router {

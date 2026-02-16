@@ -1,4 +1,5 @@
-use super::types::{ResizeImageInput, ResizeImageOutput};
+use super::image_types::{ResizeImageInput, ResizeImageOutput};
+use axum::body::Bytes;
 use axum::http::StatusCode;
 use image::{GenericImageView, guess_format, load_from_memory};
 use tracing::{debug, error, instrument, warn};
@@ -52,6 +53,22 @@ pub async fn resize_image(
         let result = ResizeImageOutput::new(buf.into_inner(), image_format.to_mime_type());
 
         Ok(result)
+    })
+    .await
+    .map_err(|e| {
+        warn!(error = ?e, "Blocking task panicked");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?
+}
+
+pub async fn crop_image(data: Bytes) -> Result<Bytes, StatusCode> {
+    tokio::task::spawn_blocking(move || {
+        let image_format = guess_format(&data).map_err(|e| {
+            error!(error = %e, "Failed to guess image format when resizing image");
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        })?;
+
+        Ok(data)
     })
     .await
     .map_err(|e| {
