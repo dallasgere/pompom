@@ -1,5 +1,5 @@
 use axum::{
-    Router,
+    Json, Router,
     extract::Multipart,
     http::{StatusCode, header},
     response::IntoResponse,
@@ -7,14 +7,20 @@ use axum::{
 };
 use tracing::{debug, info, instrument, warn};
 
-use super::image_service::{crop_image, resize_image};
-use super::image_types::{CropImageInput, ResizeImageInput};
+use super::image_service::{crop_image, get_image_dimensions, resize_image};
+use super::image_types::{
+    CropImageInput, GetImageDimensionsInput, ImageDimensionsResponse, ResizeImageInput,
+};
 
 /// Image processing router
 pub fn image_routes() -> Router {
     Router::new()
         .route("/resize", post(resize_image_controller))
         .route("/crop", post(crop_image_controller))
+        .route(
+            "/get_image_dimensions",
+            post(get_image_dimensions_controller),
+        )
 }
 
 /// resize image endpoint
@@ -205,4 +211,39 @@ pub async fn crop_image_controller(
         [(header::CONTENT_TYPE, cropped_image.image_mime_type)],
         cropped_image.data,
     ))
+}
+
+pub async fn get_image_dimensions_controller(
+    mut multipart: Multipart,
+) -> Result<impl IntoResponse, StatusCode> {
+    let mut image_date = None;
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let field_name = field.name().unwrap_or("<unnamed>").to_string();
+
+        match field_name.as_str() {
+            "image" => {
+                image_date = Some(field.bytes().await.map_err(|e| {
+                    warn!(error = ?e, "Failed to read image bytes from get height endpoint");
+                    StatusCode::BAD_REQUEST
+                })?);
+            }
+            _ => {
+                info!("Unexpected multipart form field");
+            }
+        }
+    }
+
+    let image_data = image_date.ok_or_else(|| {
+        warn!("No image found in the multipart data");
+        StatusCode::BAD_REQUEST
+    })?;
+
+    let image_to_get_dimensions_of = GetImageDimensionsInput::new(image_data);
+    let image_dimensions = get_image_dimensions(image_to_get_dimensions_of).await?;
+
+    Ok(Json(ImageDimensionsResponse {
+        width: image_dimensions.width,
+        height: image_dimensions.height,
+    }))
 }

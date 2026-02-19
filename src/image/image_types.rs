@@ -1,4 +1,5 @@
 use axum::body::Bytes;
+use serde::Serialize;
 
 pub struct ResizeImageInput {
     pub data: Bytes,
@@ -62,4 +63,36 @@ impl CropImageOutput {
             image_mime_type,
         }
     }
+}
+
+pub struct GetImageDimensionsInput {
+    pub data: Bytes,
+}
+
+impl GetImageDimensionsInput {
+    pub fn new(data: Bytes) -> Self {
+        Self { data }
+    }
+}
+
+pub struct GetImageDimensionsOutput {
+    pub height: u32,
+    pub width: u32,
+    pub image_mime_type: &'static str,
+}
+
+impl GetImageDimensionsOutput {
+    pub fn new(height: u32, width: u32, image_mime_type: &'static str) -> Self {
+        Self {
+            height,
+            width,
+            image_mime_type,
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct ImageDimensionsResponse {
+    pub width: u32,
+    pub height: u32,
 }

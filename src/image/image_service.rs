@@ -1,3 +1,5 @@
+use crate::image::image_types::{GetImageDimensionsInput, GetImageDimensionsOutput};
+
 use super::image_types::{CropImageInput, CropImageOutput, ResizeImageInput, ResizeImageOutput};
 use axum::http::StatusCode;
 use image::{GenericImageView, guess_format, load_from_memory};
@@ -87,6 +89,34 @@ pub async fn crop_image(image_to_crop: CropImageInput) -> Result<CropImageOutput
         })?;
 
         let result = CropImageOutput::new(buf.into_inner(), image_format.to_mime_type());
+
+        Ok(result)
+    })
+    .await
+    .map_err(|e| {
+        warn!(error = ?e, "Blocking task panicked");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?
+}
+
+pub async fn get_image_dimensions(
+    image: GetImageDimensionsInput,
+) -> Result<GetImageDimensionsOutput, StatusCode> {
+    tokio::task::spawn_blocking(move || {
+        let image_format = guess_format(&image.data).map_err(|e| {
+            error!(error = %e, "Failed to guess image format when resizing image");
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        })?;
+
+        let img = load_from_memory(&image.data).map_err(|e| {
+            error!(error = %e, "Failed to load image from memory");
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        })?;
+
+        let height = img.height();
+        let width = img.width();
+
+        let result = GetImageDimensionsOutput::new(height, width, image_format.to_mime_type());
 
         Ok(result)
     })
