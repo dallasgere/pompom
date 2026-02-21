@@ -1,6 +1,25 @@
 use axum::body::Bytes;
 use serde::Serialize;
 
+pub struct ProcessedImageOutput {
+    pub data: Vec<u8>,
+    pub image_mime_type: &'static str,
+}
+
+impl ProcessedImageOutput {
+    pub fn new(data: Vec<u8>, image_mime_type: &'static str) -> Self {
+        Self {
+            data,
+            image_mime_type,
+        }
+    }
+}
+
+pub type ResizeImageOutput = ProcessedImageOutput;
+pub type CropImageOutput = ProcessedImageOutput;
+
+// --- Input types ---
+
 pub struct ResizeImageInput {
     pub data: Bytes,
     pub width: u32,
@@ -13,20 +32,6 @@ impl ResizeImageInput {
             data,
             width,
             height,
-        }
-    }
-}
-
-pub struct ResizeImageOutput {
-    pub data: Vec<u8>,
-    pub image_mime_type: &'static str,
-}
-
-impl ResizeImageOutput {
-    pub fn new(data: Vec<u8>, image_mime_type: &'static str) -> Self {
-        Self {
-            data,
-            image_mime_type,
         }
     }
 }
@@ -47,20 +52,6 @@ impl CropImageInput {
             y,
             width,
             height,
-        }
-    }
-}
-
-pub struct CropImageOutput {
-    pub data: Vec<u8>,
-    pub image_mime_type: &'static str,
-}
-
-impl CropImageOutput {
-    pub fn new(data: Vec<u8>, image_mime_type: &'static str) -> Self {
-        Self {
-            data,
-            image_mime_type,
         }
     }
 }
