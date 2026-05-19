@@ -1,128 +1,109 @@
-use crate::image::image_types::{GetImageDimensionsInput, GetImageDimensionsOutput};
-
-use super::image_types::{CropImageInput, CropImageOutput, ResizeImageInput, ResizeImageOutput};
-use axum::http::StatusCode;
+use super::image_types::{
+    CropImageInput, GetImageDimensionsInput, GetImageDimensionsOutput, ImageError,
+    ProcessedImageOutput, ResizeImageInput,
+};
 use image::{GenericImageView, guess_format, load_from_memory};
 use tracing::{debug, error, instrument, warn};
 
-/// Resize an image from bytes
-#[instrument(skip(image_to_resize), fields(data_size = image_to_resize.data.len(), target_width = image_to_resize.width, target_height = image_to_resize.height))]
-pub async fn resize_image(
-    image_to_resize: ResizeImageInput,
-) -> Result<ResizeImageOutput, StatusCode> {
+#[instrument(skip(input), fields(data_size = input.data.len(), target_width = input.width, target_height = input.height))]
+pub async fn resize_image(input: ResizeImageInput) -> Result<ProcessedImageOutput, ImageError> {
     debug!("Spawning blocking task for image processing");
 
     tokio::task::spawn_blocking(move || {
-        let image_format = guess_format(&image_to_resize.data).map_err(|e| {
-            error!(error = %e, "Failed to guess image format when resizing image");
-            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        let image_format = guess_format(&input.data).map_err(|e| {
+            error!(error = %e, "Failed to guess image format");
+            ImageError::UnsupportedFormat
         })?;
 
         debug!("Loading image from memory");
-        let img = load_from_memory(&image_to_resize.data).map_err(|e| {
+        let img = load_from_memory(&input.data).map_err(|e| {
             error!(error = %e, "Failed to load image from memory");
-            StatusCode::UNSUPPORTED_MEDIA_TYPE
+            ImageError::UnsupportedFormat
         })?;
 
         let (original_width, original_height) = img.dimensions();
-        debug!(
-            width = original_width,
-            height = original_height,
-            "Loaded image, starting resize"
-        );
+        debug!(width = original_width, height = original_height, "Loaded image, starting resize");
 
-        let resized = img.resize(
-            image_to_resize.width,
-            image_to_resize.height,
-            image::imageops::FilterType::Lanczos3,
-        );
-        debug!(
-            target_width = image_to_resize.width,
-            target_height = image_to_resize.height,
-            "Image resized"
-        );
+        let resized = img.resize(input.width, input.height, image::imageops::FilterType::Lanczos3);
+        debug!(target_width = input.width, target_height = input.height, "Image resized");
 
         let mut buf = std::io::Cursor::new(Vec::new());
         resized.write_to(&mut buf, image_format).map_err(|e| {
             error!(error = %e, "Failed to encode image");
-            StatusCode::INTERNAL_SERVER_ERROR
+            ImageError::EncodeFailed
         })?;
 
-        let output_size = buf.get_ref().len();
-        debug!(output_bytes = output_size, "Image encoded successfully");
+        debug!(output_bytes = buf.get_ref().len(), "Image encoded successfully");
 
-        let result = ResizeImageOutput::new(buf.into_inner(), image_format.to_mime_type());
-
-        Ok(result)
+        Ok(ProcessedImageOutput {
+            data: buf.into_inner(),
+            image_mime_type: image_format.to_mime_type(),
+        })
     })
     .await
     .map_err(|e| {
         warn!(error = ?e, "Blocking task panicked");
-        StatusCode::INTERNAL_SERVER_ERROR
+        ImageError::InternalError
     })?
 }
 
-pub async fn crop_image(image_to_crop: CropImageInput) -> Result<CropImageOutput, StatusCode> {
+#[instrument(skip(input), fields(data_size = input.data.len()))]
+pub async fn crop_image(input: CropImageInput) -> Result<ProcessedImageOutput, ImageError> {
     tokio::task::spawn_blocking(move || {
-        let image_format = guess_format(&image_to_crop.data).map_err(|e| {
-            error!(error = %e, "Failed to guess image format when resizing image");
-            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        let image_format = guess_format(&input.data).map_err(|e| {
+            error!(error = %e, "Failed to guess image format");
+            ImageError::UnsupportedFormat
         })?;
 
-        debug!("Loading image from memory");
-        let mut img = load_from_memory(&image_to_crop.data).map_err(|e| {
+        let mut img = load_from_memory(&input.data).map_err(|e| {
             error!(error = %e, "Failed to load image from memory");
-            StatusCode::UNSUPPORTED_MEDIA_TYPE
+            ImageError::UnsupportedFormat
         })?;
 
-        let cropped = img.crop(
-            image_to_crop.x,
-            image_to_crop.y,
-            image_to_crop.width,
-            image_to_crop.height,
-        );
+        let cropped = img.crop(input.x, input.y, input.width, input.height);
 
         let mut buf = std::io::Cursor::new(Vec::new());
         cropped.write_to(&mut buf, image_format).map_err(|e| {
             error!(error = %e, "Failed to encode image");
-            StatusCode::INTERNAL_SERVER_ERROR
+            ImageError::EncodeFailed
         })?;
 
-        let result = CropImageOutput::new(buf.into_inner(), image_format.to_mime_type());
-
-        Ok(result)
+        Ok(ProcessedImageOutput {
+            data: buf.into_inner(),
+            image_mime_type: image_format.to_mime_type(),
+        })
     })
     .await
     .map_err(|e| {
         warn!(error = ?e, "Blocking task panicked");
-        StatusCode::INTERNAL_SERVER_ERROR
+        ImageError::InternalError
     })?
 }
 
+#[instrument(skip(input), fields(data_size = input.data.len()))]
 pub async fn get_image_dimensions(
-    image: GetImageDimensionsInput,
-) -> Result<GetImageDimensionsOutput, StatusCode> {
+    input: GetImageDimensionsInput,
+) -> Result<GetImageDimensionsOutput, ImageError> {
     tokio::task::spawn_blocking(move || {
-        let image_format = guess_format(&image.data).map_err(|e| {
-            error!(error = %e, "Failed to guess image format when resizing image");
-            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        let image_format = guess_format(&input.data).map_err(|e| {
+            error!(error = %e, "Failed to guess image format");
+            ImageError::UnsupportedFormat
         })?;
 
-        let img = load_from_memory(&image.data).map_err(|e| {
+        let img = load_from_memory(&input.data).map_err(|e| {
             error!(error = %e, "Failed to load image from memory");
-            StatusCode::UNSUPPORTED_MEDIA_TYPE
+            ImageError::UnsupportedFormat
         })?;
 
-        let height = img.height();
-        let width = img.width();
-
-        let result = GetImageDimensionsOutput::new(height, width, image_format.to_mime_type());
-
-        Ok(result)
+        Ok(GetImageDimensionsOutput {
+            height: img.height(),
+            width: img.width(),
+            image_mime_type: image_format.to_mime_type(),
+        })
     })
     .await
     .map_err(|e| {
         warn!(error = ?e, "Blocking task panicked");
-        StatusCode::INTERNAL_SERVER_ERROR
+        ImageError::InternalError
     })?
 }

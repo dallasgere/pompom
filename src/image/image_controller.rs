@@ -2,39 +2,49 @@ use axum::{
     Json, Router,
     extract::Multipart,
     http::{StatusCode, header},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::post,
 };
 use tracing::{debug, info, instrument, warn};
 
 use super::image_service::{crop_image, get_image_dimensions, resize_image};
 use super::image_types::{
-    CropImageInput, GetImageDimensionsInput, ImageDimensionsResponse, ResizeImageInput,
+    CropImageInput, GetImageDimensionsInput, ImageDimensionsResponse, ImageError, ResizeImageInput,
 };
 
-/// Image processing router
+impl IntoResponse for ImageError {
+    fn into_response(self) -> Response {
+        let status = match self {
+            ImageError::BadRequest => StatusCode::BAD_REQUEST,
+            ImageError::UnsupportedFormat => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            ImageError::EncodeFailed => StatusCode::INTERNAL_SERVER_ERROR,
+            ImageError::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        status.into_response()
+    }
+}
+
 pub fn image_routes() -> Router {
     Router::new()
         .route("/resize", post(resize_image_controller))
         .route("/crop", post(crop_image_controller))
-        .route(
-            "/get_image_dimensions",
-            post(get_image_dimensions_controller),
-        )
+        .route("/get_image_dimensions", post(get_image_dimensions_controller))
 }
 
-/// resize image endpoint
 #[instrument(skip(multipart))]
 pub async fn resize_image_controller(
     mut multipart: Multipart,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, ImageError> {
     info!("Received image resize request");
 
     let mut image_data = None;
     let mut width = None;
     let mut height = None;
 
-    while let Ok(Some(field)) = multipart.next_field().await {
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        warn!(error = ?e, "Failed to read multipart field");
+        ImageError::BadRequest
+    })? {
         let field_name = field.name().unwrap_or("<unnamed>").to_string();
         debug!(field_name = %field_name, "Found multipart field");
 
@@ -42,29 +52,27 @@ pub async fn resize_image_controller(
             "image" => {
                 image_data = Some(field.bytes().await.map_err(|e| {
                     warn!(error = ?e, "Failed to read field bytes");
-                    StatusCode::BAD_REQUEST
+                    ImageError::BadRequest
                 })?);
             }
             "width" => {
-                let width_str = field.text().await.map_err(|e| {
-                    warn!(error = ?e, "Failed to get image width param");
-                    StatusCode::BAD_REQUEST
+                let text = field.text().await.map_err(|e| {
+                    warn!(error = ?e, "Failed to get width param");
+                    ImageError::BadRequest
                 })?;
-
-                width = Some(width_str.parse::<u32>().map_err(|e| {
+                width = Some(text.parse::<u32>().map_err(|e| {
                     warn!(error = ?e, "Failed to parse width as u32");
-                    StatusCode::BAD_REQUEST
+                    ImageError::BadRequest
                 })?);
             }
             "height" => {
-                let height_str = field.text().await.map_err(|e| {
-                    warn!(error = ?e, "Failed to get the image height param");
-                    StatusCode::BAD_REQUEST
+                let text = field.text().await.map_err(|e| {
+                    warn!(error = ?e, "Failed to get height param");
+                    ImageError::BadRequest
                 })?;
-
-                height = Some(height_str.parse::<u32>().map_err(|e| {
+                height = Some(text.parse::<u32>().map_err(|e| {
                     warn!(error = ?e, "Failed to parse height as u32");
-                    StatusCode::BAD_REQUEST
+                    ImageError::BadRequest
                 })?);
             }
             _ => {
@@ -73,35 +81,24 @@ pub async fn resize_image_controller(
         }
     }
 
-    // Ensure we have all required fields
     let data = image_data.ok_or_else(|| {
         warn!("No 'image' field found in multipart data");
-        StatusCode::BAD_REQUEST
+        ImageError::BadRequest
     })?;
 
     let width = width.unwrap_or(800);
     let height = height.unwrap_or(600);
+    debug!(width, height, "Using dimensions for resize");
 
-    debug!(
-        width = width,
-        height = height,
-        "Using dimensions for resize"
-    );
+    let result = resize_image(ResizeImageInput { data, width, height }).await?;
 
-    let image_to_resize = ResizeImageInput::new(data, width, height);
-    let resized_image = resize_image(image_to_resize).await?;
-
-    Ok((
-        [(header::CONTENT_TYPE, resized_image.image_mime_type)],
-        resized_image.data,
-    ))
+    Ok(([(header::CONTENT_TYPE, result.image_mime_type)], result.data))
 }
 
-/// crop image endpoint
 #[instrument(skip(multipart))]
 pub async fn crop_image_controller(
     mut multipart: Multipart,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, ImageError> {
     info!("Received image crop request");
 
     let mut image_data = None;
@@ -110,7 +107,10 @@ pub async fn crop_image_controller(
     let mut width = None;
     let mut height = None;
 
-    while let Ok(Some(field)) = multipart.next_field().await {
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        warn!(error = ?e, "Failed to read multipart field");
+        ImageError::BadRequest
+    })? {
         let field_name = field.name().unwrap_or("<unnamed>").to_string();
         debug!(field_name = %field_name, "Found multipart field");
 
@@ -118,51 +118,47 @@ pub async fn crop_image_controller(
             "image" => {
                 image_data = Some(field.bytes().await.map_err(|e| {
                     warn!(error = ?e, "Failed to read field bytes");
-                    StatusCode::BAD_REQUEST
+                    ImageError::BadRequest
                 })?);
             }
             "x" => {
-                let x_str = field.text().await.map_err(|e| {
-                    warn!(error = ?e, "Failed to get the x param");
-                    StatusCode::BAD_REQUEST
+                let text = field.text().await.map_err(|e| {
+                    warn!(error = ?e, "Failed to get x param");
+                    ImageError::BadRequest
                 })?;
-
-                x = Some(x_str.parse::<u32>().map_err(|e| {
+                x = Some(text.parse::<u32>().map_err(|e| {
                     warn!(error = ?e, "Failed to parse x as u32");
-                    StatusCode::BAD_REQUEST
+                    ImageError::BadRequest
                 })?);
             }
             "y" => {
-                let y_str = field.text().await.map_err(|e| {
-                    warn!(error = ?e, "Failed to get the y param");
-                    StatusCode::BAD_REQUEST
+                let text = field.text().await.map_err(|e| {
+                    warn!(error = ?e, "Failed to get y param");
+                    ImageError::BadRequest
                 })?;
-
-                y = Some(y_str.parse::<u32>().map_err(|e| {
+                y = Some(text.parse::<u32>().map_err(|e| {
                     warn!(error = ?e, "Failed to parse y as u32");
-                    StatusCode::BAD_REQUEST
+                    ImageError::BadRequest
                 })?);
             }
             "width" => {
-                let width_str = field.text().await.map_err(|e| {
-                    warn!(error = ?e, "Failed to get image width param");
-                    StatusCode::BAD_REQUEST
+                let text = field.text().await.map_err(|e| {
+                    warn!(error = ?e, "Failed to get width param");
+                    ImageError::BadRequest
                 })?;
-
-                width = Some(width_str.parse::<u32>().map_err(|e| {
+                width = Some(text.parse::<u32>().map_err(|e| {
                     warn!(error = ?e, "Failed to parse width as u32");
-                    StatusCode::BAD_REQUEST
+                    ImageError::BadRequest
                 })?);
             }
             "height" => {
-                let height_str = field.text().await.map_err(|e| {
-                    warn!(error = ?e, "Failed to get the image height param");
-                    StatusCode::BAD_REQUEST
+                let text = field.text().await.map_err(|e| {
+                    warn!(error = ?e, "Failed to get height param");
+                    ImageError::BadRequest
                 })?;
-
-                height = Some(height_str.parse::<u32>().map_err(|e| {
+                height = Some(text.parse::<u32>().map_err(|e| {
                     warn!(error = ?e, "Failed to parse height as u32");
-                    StatusCode::BAD_REQUEST
+                    ImageError::BadRequest
                 })?);
             }
             _ => {
@@ -173,59 +169,49 @@ pub async fn crop_image_controller(
 
     let data = image_data.ok_or_else(|| {
         warn!("No 'image' field found in multipart data");
-        StatusCode::BAD_REQUEST
+        ImageError::BadRequest
     })?;
-
     let x = x.ok_or_else(|| {
         warn!("No 'x' field found in multipart data");
-        StatusCode::BAD_REQUEST
+        ImageError::BadRequest
     })?;
-
     let y = y.ok_or_else(|| {
         warn!("No 'y' field found in multipart data");
-        StatusCode::BAD_REQUEST
+        ImageError::BadRequest
     })?;
-
     let width = width.ok_or_else(|| {
         warn!("No 'width' field found in multipart data");
-        StatusCode::BAD_REQUEST
+        ImageError::BadRequest
     })?;
-
     let height = height.ok_or_else(|| {
         warn!("No 'height' field found in multipart data");
-        StatusCode::BAD_REQUEST
+        ImageError::BadRequest
     })?;
 
-    debug!(
-        x = x,
-        y = y,
-        width = width,
-        height = height,
-        "Using dimensions for crop"
-    );
+    debug!(x, y, width, height, "Using dimensions for crop");
 
-    let image_to_crop = CropImageInput::new(data, x, y, width, height);
-    let cropped_image = crop_image(image_to_crop).await?;
+    let result = crop_image(CropImageInput { data, x, y, width, height }).await?;
 
-    Ok((
-        [(header::CONTENT_TYPE, cropped_image.image_mime_type)],
-        cropped_image.data,
-    ))
+    Ok(([(header::CONTENT_TYPE, result.image_mime_type)], result.data))
 }
 
+#[instrument(skip(multipart))]
 pub async fn get_image_dimensions_controller(
     mut multipart: Multipart,
-) -> Result<impl IntoResponse, StatusCode> {
-    let mut image_date = None;
+) -> Result<impl IntoResponse, ImageError> {
+    let mut image_data = None;
 
-    while let Ok(Some(field)) = multipart.next_field().await {
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        warn!(error = ?e, "Failed to read multipart field");
+        ImageError::BadRequest
+    })? {
         let field_name = field.name().unwrap_or("<unnamed>").to_string();
 
         match field_name.as_str() {
             "image" => {
-                image_date = Some(field.bytes().await.map_err(|e| {
-                    warn!(error = ?e, "Failed to read image bytes from get height endpoint");
-                    StatusCode::BAD_REQUEST
+                image_data = Some(field.bytes().await.map_err(|e| {
+                    warn!(error = ?e, "Failed to read image bytes");
+                    ImageError::BadRequest
                 })?);
             }
             _ => {
@@ -234,16 +220,15 @@ pub async fn get_image_dimensions_controller(
         }
     }
 
-    let image_data = image_date.ok_or_else(|| {
-        warn!("No image found in the multipart data");
-        StatusCode::BAD_REQUEST
+    let data = image_data.ok_or_else(|| {
+        warn!("No 'image' field found in multipart data");
+        ImageError::BadRequest
     })?;
 
-    let image_to_get_dimensions_of = GetImageDimensionsInput::new(image_data);
-    let image_dimensions = get_image_dimensions(image_to_get_dimensions_of).await?;
+    let dims = get_image_dimensions(GetImageDimensionsInput { data }).await?;
 
     Ok(Json(ImageDimensionsResponse {
-        width: image_dimensions.width,
-        height: image_dimensions.height,
+        width: dims.width,
+        height: dims.height,
     }))
 }
