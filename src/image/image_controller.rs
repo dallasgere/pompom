@@ -1,49 +1,30 @@
-use axum::{
-    Json, Router,
-    body::Bytes,
-    extract::{Multipart, multipart::Field},
-    http::{StatusCode, header},
-    response::{IntoResponse, Response},
-    routing::post,
-};
-use tracing::{debug, info, instrument, warn};
-
 use super::image_service::{crop_image, get_image_dimensions, resize_image};
 use super::image_types::{
     CropImageInput, GetImageDimensionsInput, ImageDimensionsResponse, ImageError, ResizeImageInput,
 };
+use axum::{
+    Json, Router,
+    extract::{Multipart},
+    http::{header},
+    response::{IntoResponse},
+    routing::post,
+};
+use tracing::{debug, info, instrument, warn};
+use super::image_util::{read_bytes, read_u32};
 
-impl IntoResponse for ImageError {
-    fn into_response(self) -> Response {
-        let status = match self {
-            ImageError::BadRequest => StatusCode::BAD_REQUEST,
-            ImageError::UnsupportedFormat => StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            ImageError::EncodeFailed | ImageError::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
-        };
-        status.into_response()
-    }
-}
 
-async fn read_bytes(field: Field<'_>) -> Result<Bytes, ImageError> {
-    field.bytes().await.map_err(|_| ImageError::BadRequest)
-}
-
-async fn read_u32(field: Field<'_>) -> Result<u32, ImageError> {
-    field
-        .text()
-        .await
-        .map_err(|_| ImageError::BadRequest)?
-        .parse()
-        .map_err(|_| ImageError::BadRequest)
-}
-
+/// This is the actual route group we register in main.rs
 pub fn image_routes() -> Router {
     Router::new()
         .route("/resize", post(resize_image_controller))
         .route("/crop", post(crop_image_controller))
-        .route("/get_image_dimensions", post(get_image_dimensions_controller))
+        .route(
+            "/get_image_dimensions",
+            post(get_image_dimensions_controller),
+        )
 }
 
+/// Resize an image
 #[instrument(skip(multipart))]
 pub async fn resize_image_controller(
     mut multipart: Multipart,
@@ -54,7 +35,11 @@ pub async fn resize_image_controller(
     let mut width = None;
     let mut height = None;
 
-    while let Some(field) = multipart.next_field().await.map_err(|_| ImageError::BadRequest)? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| ImageError::BadRequest)?
+    {
         match field.name().unwrap_or("") {
             "image" => image_data = Some(read_bytes(field).await?),
             "width" => width = Some(read_u32(field).await?),
@@ -71,11 +56,20 @@ pub async fn resize_image_controller(
     let height = height.unwrap_or(600);
     debug!(width, height, "Using dimensions for resize");
 
-    let result = resize_image(ResizeImageInput { data, width, height }).await?;
+    let result = resize_image(ResizeImageInput {
+        data,
+        width,
+        height,
+    })
+    .await?;
 
-    Ok(([(header::CONTENT_TYPE, result.image_mime_type)], result.data))
+    Ok((
+        [(header::CONTENT_TYPE, result.image_mime_type)],
+        result.data,
+    ))
 }
 
+/// Crop an image
 #[instrument(skip(multipart))]
 pub async fn crop_image_controller(
     mut multipart: Multipart,
@@ -88,7 +82,11 @@ pub async fn crop_image_controller(
     let mut width = None;
     let mut height = None;
 
-    while let Some(field) = multipart.next_field().await.map_err(|_| ImageError::BadRequest)? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| ImageError::BadRequest)?
+    {
         match field.name().unwrap_or("") {
             "image" => image_data = Some(read_bytes(field).await?),
             "x" => x = Some(read_u32(field).await?),
@@ -99,25 +97,55 @@ pub async fn crop_image_controller(
         }
     }
 
-    let data = image_data.ok_or_else(|| { warn!("Missing required 'image' field"); ImageError::BadRequest })?;
-    let x = x.ok_or_else(|| { warn!("Missing required 'x' field"); ImageError::BadRequest })?;
-    let y = y.ok_or_else(|| { warn!("Missing required 'y' field"); ImageError::BadRequest })?;
-    let width = width.ok_or_else(|| { warn!("Missing required 'width' field"); ImageError::BadRequest })?;
-    let height = height.ok_or_else(|| { warn!("Missing required 'height' field"); ImageError::BadRequest })?;
+    let data = image_data.ok_or_else(|| {
+        warn!("Missing required 'image' field");
+        ImageError::BadRequest
+    })?;
+    let x = x.ok_or_else(|| {
+        warn!("Missing required 'x' field");
+        ImageError::BadRequest
+    })?;
+    let y = y.ok_or_else(|| {
+        warn!("Missing required 'y' field");
+        ImageError::BadRequest
+    })?;
+    let width = width.ok_or_else(|| {
+        warn!("Missing required 'width' field");
+        ImageError::BadRequest
+    })?;
+    let height = height.ok_or_else(|| {
+        warn!("Missing required 'height' field");
+        ImageError::BadRequest
+    })?;
     debug!(x, y, width, height, "Using dimensions for crop");
 
-    let result = crop_image(CropImageInput { data, x, y, width, height }).await?;
+    let result = crop_image(CropImageInput {
+        data,
+        x,
+        y,
+        width,
+        height,
+    })
+    .await?;
 
-    Ok(([(header::CONTENT_TYPE, result.image_mime_type)], result.data))
+    Ok((
+        [(header::CONTENT_TYPE, result.image_mime_type)],
+        result.data,
+    ))
 }
 
+/// Get image dimensions
 #[instrument(skip(multipart))]
 pub async fn get_image_dimensions_controller(
     mut multipart: Multipart,
 ) -> Result<impl IntoResponse, ImageError> {
     let mut image_data = None;
 
-    while let Some(field) = multipart.next_field().await.map_err(|_| ImageError::BadRequest)? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| ImageError::BadRequest)?
+    {
         if field.name().unwrap_or("") == "image" {
             image_data = Some(read_bytes(field).await?);
         }
@@ -130,5 +158,8 @@ pub async fn get_image_dimensions_controller(
 
     let dims = get_image_dimensions(GetImageDimensionsInput { data }).await?;
 
-    Ok(Json(ImageDimensionsResponse { width: dims.width, height: dims.height }))
+    Ok(Json(ImageDimensionsResponse {
+        width: dims.width,
+        height: dims.height,
+    }))
 }
