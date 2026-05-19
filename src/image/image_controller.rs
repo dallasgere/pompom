@@ -28,7 +28,10 @@ pub fn image_routes() -> Router {
     Router::new()
         .route("/resize", post(resize_image_controller))
         .route("/crop", post(crop_image_controller))
-        .route("/get_image_dimensions", post(get_image_dimensions_controller))
+        .route(
+            "/get_image_dimensions",
+            post(get_image_dimensions_controller),
+        )
 }
 
 #[instrument(skip(multipart))]
@@ -90,9 +93,17 @@ pub async fn resize_image_controller(
     let height = height.unwrap_or(600);
     debug!(width, height, "Using dimensions for resize");
 
-    let result = resize_image(ResizeImageInput { data, width, height }).await?;
+    let result = resize_image(ResizeImageInput {
+        data,
+        width,
+        height,
+    })
+    .await?;
 
-    Ok(([(header::CONTENT_TYPE, result.image_mime_type)], result.data))
+    Ok((
+        [(header::CONTENT_TYPE, result.image_mime_type)],
+        result.data,
+    ))
 }
 
 #[instrument(skip(multipart))]
@@ -190,9 +201,19 @@ pub async fn crop_image_controller(
 
     debug!(x, y, width, height, "Using dimensions for crop");
 
-    let result = crop_image(CropImageInput { data, x, y, width, height }).await?;
+    let result = crop_image(CropImageInput {
+        data,
+        x,
+        y,
+        width,
+        height,
+    })
+    .await?;
 
-    Ok(([(header::CONTENT_TYPE, result.image_mime_type)], result.data))
+    Ok((
+        [(header::CONTENT_TYPE, result.image_mime_type)],
+        result.data,
+    ))
 }
 
 #[instrument(skip(multipart))]

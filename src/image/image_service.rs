@@ -22,10 +22,22 @@ pub async fn resize_image(input: ResizeImageInput) -> Result<ProcessedImageOutpu
         })?;
 
         let (original_width, original_height) = img.dimensions();
-        debug!(width = original_width, height = original_height, "Loaded image, starting resize");
+        debug!(
+            width = original_width,
+            height = original_height,
+            "Loaded image, starting resize"
+        );
 
-        let resized = img.resize(input.width, input.height, image::imageops::FilterType::Lanczos3);
-        debug!(target_width = input.width, target_height = input.height, "Image resized");
+        let resized = img.resize(
+            input.width,
+            input.height,
+            image::imageops::FilterType::Lanczos3,
+        );
+        debug!(
+            target_width = input.width,
+            target_height = input.height,
+            "Image resized"
+        );
 
         let mut buf = std::io::Cursor::new(Vec::new());
         resized.write_to(&mut buf, image_format).map_err(|e| {
@@ -33,7 +45,10 @@ pub async fn resize_image(input: ResizeImageInput) -> Result<ProcessedImageOutpu
             ImageError::EncodeFailed
         })?;
 
-        debug!(output_bytes = buf.get_ref().len(), "Image encoded successfully");
+        debug!(
+            output_bytes = buf.get_ref().len(),
+            "Image encoded successfully"
+        );
 
         Ok(ProcessedImageOutput {
             data: buf.into_inner(),
